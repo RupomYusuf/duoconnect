@@ -1,0 +1,351 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>DuoConnect — Play Together, Stay Close</title>
+<script src="https://unpkg.com/peerjs@1.5.4/dist/peerjs.min.js"></script>
+<link rel="stylesheet" href="styles.css">
+</head>
+<body data-mode="hub">
+
+<!-- ===================== LOCK SCREEN ===================== -->
+<div id="lockScreen" class="lock-screen hidden">
+  <div class="lock-card">
+    <div class="lock-logo">💞</div>
+    <h1 id="lockTitle">Set your Private Space PIN</h1>
+    <p class="lock-sub">This PIN unlocks the Private Couple's Space. It never leaves this device.</p>
+    <div class="pin-dots" id="pinDots"></div>
+    <div class="pin-pad" id="pinPad"></div>
+    <button class="btn ghost" id="pinCancel">Back to Game Hub</button>
+    <button class="btn ghost hidden" id="pinForgot">Forgot PIN?</button>
+  </div>
+</div>
+
+<!-- ===================== APP SHELL ===================== -->
+<div class="app" id="app">
+  <header class="topbar">
+    <div class="brand"><span class="brand-mark">💞</span> DuoConnect</div>
+    <nav class="mode-switch" id="modeSwitch">
+      <button class="mode-btn active" data-mode="hub">🎮 Game Hub</button>
+      <button class="mode-btn private" data-mode="private">🔒 Private Space</button>
+    </nav>
+    <button class="link-chip" id="linkChip">🔗 Not linked</button>
+    <div class="couple-chip" title="You & your partner">
+      <span class="avatar" style="background:#e58aa0">A</span><span class="avatar" style="background:#7fa8e0">J</span>
+      <span class="couple-name" id="coupleName">Alex &amp; Jordan</span>
+    </div>
+  </header>
+
+  <!-- ===================== GAME HUB ===================== -->
+  <main class="view active" id="view-hub">
+    <section class="hero">
+      <div>
+        <h1>Play together, grow closer.</h1>
+        <p>Games, challenges and milestones for the two of you — plus a private space only you can open.</p>
+      </div>
+      <div class="hero-streak">
+        <div class="streak-num" id="streakNum">7</div>
+        <div class="streak-label">day streak 🔥</div>
+      </div>
+    </section>
+
+    <!-- Multiplayer Games -->
+    <h2 class="section-title">Multiplayer Games</h2>
+    <div class="card-grid" id="gameGrid">
+      <article class="game-card" data-game="puzzle">
+        <div class="game-icon">🧩</div>
+        <h3>Co-op Puzzle</h3>
+        <p>Solve interconnected puzzles — each of you holds half the clues.</p>
+        <div class="card-foot"><span class="tag">2 players</span><span class="stat">Best: 04:12</span></div>
+      </article>
+      <article class="game-card" data-game="trivia">
+        <div class="game-icon">🎯</div>
+        <h3>Trivia Battle</h3>
+        <p>Head-to-head trivia. Winner picks the next date night.</p>
+        <div class="card-foot"><span class="tag">Versus</span><span class="stat" id="triviaScore">You 2 – 1 Partner</span></div>
+      </article>
+      <article class="game-card" data-game="draw">
+        <div class="game-icon">🎨</div>
+        <h3>Draw &amp; Guess</h3>
+        <p>One draws, one guesses. Fork it with inside jokes.</p>
+        <div class="card-foot"><span class="tag">Co-op</span><span class="stat">128 words</span></div>
+      </article>
+      <article class="game-card" data-game="strategy">
+        <div class="game-icon">♟️</div>
+        <h3>Strategy Duels</h3>
+        <p>Chess, dots &amp; boxes, and turn-based tactics.</p>
+        <div class="card-foot"><span class="tag">Versus</span><span class="stat">Elo 1240</span></div>
+      </article>
+      <article class="game-card playable" data-game="memory">
+        <div class="game-icon">🃏</div>
+        <h3>Memory Match</h3>
+        <p>Co-op memory: flip cards together and beat your best move count.</p>
+        <div class="card-foot"><span class="tag">Co-op · playable</span><span class="stat">Best: 14 moves</span></div>
+      </article>
+      <article class="game-card playable" data-game="sync">
+        <div class="game-icon">🪞</div>
+        <h3>Sync Quiz</h3>
+        <p>Guess each other's answers — the classic compatibility test.</p>
+        <div class="card-foot"><span class="tag">Co-op · playable</span><span class="stat" id="syncStat">82% synced</span></div>
+      </article>
+      <article class="game-card" data-game="scavenger">
+        <div class="game-icon">📸</div>
+        <h3>Photo Scavenger Hunt</h3>
+        <p>Weekly photo missions you complete together, voted on by your circle.</p>
+        <div class="card-foot"><span class="tag">Co-op</span><span class="stat">New mission Fridays</span></div>
+      </article>
+      <article class="game-card" data-game="story">
+        <div class="game-icon">📖</div>
+        <h3>Story Builder</h3>
+        <p>Take turns adding one sentence — see where the story goes.</p>
+        <div class="card-foot"><span class="tag">Co-op</span><span class="stat">3 stories going</span></div>
+      </article>
+      <article class="game-card" data-game="playlist">
+        <div class="game-icon">🎵</div>
+        <h3>Playlist Swap</h3>
+        <p>Build each other a secret 5-song playlist, then reveal and listen.</p>
+        <div class="card-foot"><span class="tag">Co-op</span><span class="stat">Last swap: Aug</span></div>
+      </article>
+      <article class="game-card" data-game="recipe">
+        <div class="game-icon">🍳</div>
+        <h3>Recipe Roulette</h3>
+        <p>Random recipe, random roles: one chefs, one sous-chef. No complaints.</p>
+        <div class="card-foot"><span class="tag">Co-op</span><span class="stat" id="recipeStat">42 recipes cooked</span></div>
+      </article>
+    </div>
+
+    <!-- Customizable Challenges -->
+    <h2 class="section-title">Customizable Challenges</h2>
+    <div class="panel-row">
+      <div class="panel" id="loveLangPanel">
+        <h3>💗 Love Language Quiz</h3>
+        <p class="panel-sub">5 quick questions — compare answers and learn how you each feel most loved.</p>
+        <div id="loveLangBody">
+          <button class="btn primary" id="loveLangStart">Start quiz</button>
+        </div>
+      </div>
+      <div class="panel" id="spinnerPanel">
+        <h3>🎡 Date Night Spinner</h3>
+        <div class="spinner-result" id="spinnerResult">Ready to spin?</div>
+        <div class="spinner-wheel" id="spinnerWheel">🎡</div>
+        <button class="btn primary" id="spinnerSpin">Spin the wheel</button>
+        <details class="customize">
+          <summary>Customize options</summary>
+          <textarea id="spinnerOptions" rows="3"></textarea>
+          <button class="btn small" id="spinnerSave">Save list</button>
+        </details>
+      </div>
+      <div class="panel" id="starterPanel">
+        <h3>💬 Conversation Starters</h3>
+        <blockquote class="starter" id="starterText">"What's a small thing I do that makes your day better?"</blockquote>
+        <div class="btn-row">
+          <button class="btn primary" id="starterNext">Next question</button>
+          <button class="btn ghost" id="starterFav">♡ Save</button>
+        </div>
+        <details class="customize">
+          <summary>Saved starters (<span id="starterCount">0</span>)</summary>
+          <ul class="saved-list" id="starterSaved"></ul>
+        </details>
+      </div>
+    </div>
+
+    <!-- Achievements -->
+    <h2 class="section-title">Achievements &amp; Milestones</h2>
+    <div class="panel-row">
+      <div class="panel wide">
+        <h3>🏆 Milestones</h3>
+        <ul class="milestones" id="milestoneList"></ul>
+        <button class="btn ghost small" id="addMilestone">+ Add milestone</button>
+      </div>
+      <div class="panel">
+        <h3>🎖️ Achievements</h3>
+        <div class="ach-grid" id="achGrid"></div>
+      </div>
+    </div>
+
+    <!-- Social -->
+    <h2 class="section-title">Social <span class="muted-inline">· private to your circle</span></h2>
+    <div class="panel-row">
+      <div class="panel">
+        <h3>🥇 Couple Leaderboard <span class="lock-note">friends-only</span></h3>
+        <ol class="leaderboard" id="leaderboard"></ol>
+      </div>
+      <div class="panel">
+        <h3>👥 Couple Friends</h3>
+        <ul class="friend-list" id="friendList"></ul>
+        <button class="btn ghost small" id="inviteFriends">+ Invite a couple</button>
+      </div>
+      <div class="panel">
+        <h3>🎯 Relationship Goals</h3>
+        <ul class="goals" id="goalList"></ul>
+        <div class="btn-row"><button class="btn ghost small" id="addGoal">+ Add goal</button></div>
+      </div>
+    </div>
+  </main>
+
+  <!-- ===================== PRIVATE SPACE ===================== -->
+  <main class="view private-view" id="view-private">
+    <div class="private-banner">
+      <span>🔒 Everything below is end-to-end encrypted and never appears in the Game Hub.</span>
+      <button class="btn small" id="changePinBtn" style="margin-left:auto;white-space:nowrap">🔑 Change PIN</button>
+    </div>
+
+    <nav class="subnav" id="privateNav">
+      <button class="subnav-btn active" data-tab="chat">💬 Messages</button>
+      <button class="subnav-btn" data-tab="games">🔥 Intimate Games</button>
+      <button class="subnav-btn" data-tab="lists">📝 Shared Lists</button>
+      <button class="subnav-btn" data-tab="vault">🗝️ Vault</button>
+      <button class="subnav-btn" data-tab="mood">📅 Mood &amp; Availability</button>
+    </nav>
+
+    <!-- Messages -->
+    <section class="tab active" id="tab-chat">
+      <div class="chat-wrap panel">
+        <div class="chat-head">
+          <h3>Encrypted chat with Jordan</h3>
+          <label class="toggle"><input type="checkbox" id="autoDeleteToggle"> Auto-delete messages after 24h</label>
+        </div>
+        <div class="chat-log" id="chatLog"></div>
+        <form class="chat-input" id="chatForm">
+          <input type="text" id="chatText" placeholder="Type a private message…" autocomplete="off">
+          <button class="btn primary" type="submit">Send</button>
+        </form>
+        <p class="chat-note">🔑 Messages are end-to-end encrypted · 📎 tap to share photos &amp; videos · auto-delete media supported</p>
+      </div>
+    </section>
+
+    <!-- Intimate games -->
+    <section class="tab" id="tab-games">
+      <div class="panel-row">
+        <div class="panel">
+          <h3>🃏 Truth or Dare</h3>
+          <p class="panel-sub">Pick your level together. Both partners must opt in to a level before it can appear.</p>
+          <div class="level-picker" id="todLevels">
+            <button class="level-btn" data-level="sweet">💌 Sweet</button>
+            <button class="level-btn" data-level="spicy">🌶️ Spicy</button>
+            <button class="level-btn" data-level="bold">🔥 Bold <span class="consent-note">(both consent)</span></button>
+            <button class="level-btn inferno" data-level="inferno">💥 Inferno <span class="consent-note">(typed consent)</span></button>
+          </div>
+          <div class="draw-result" id="todResult">Choose a level, then draw.</div>
+          <div class="btn-row">
+            <button class="btn primary" id="todTruth">Truth</button>
+            <button class="btn primary" id="todDare">Dare</button>
+          </div>
+        </div>
+        <div class="panel">
+          <h3>⏳ Anticipation Game</h3>
+          <p class="panel-sub">Set a countdown and a hint. Your partner sees the hint but not what's coming.</p>
+          <div class="countdown" id="countdownDisplay">00:00</div>
+          <div class="btn-row">
+            <select id="countdownMinutes">
+              <option value="5">5 minutes</option><option value="15">15 minutes</option>
+              <option value="60">1 hour</option><option value="1440">Tomorrow</option>
+            </select>
+            <button class="btn primary" id="countdownStart">Start</button>
+            <button class="btn ghost" id="countdownStop">Stop</button>
+          </div>
+          <input type="text" id="countdownHint" placeholder="Hint for your partner (e.g. 'check the bedroom…')">
+        </div>
+      </div>
+      <div class="panel-row" style="margin-top:14px">
+        <div class="panel">
+          <h3>🎲 Roll the Dice</h3>
+          <p class="panel-sub">Two dice: one picks where, one picks how. Whoever rolls, gives.</p>
+          <label class="toggle" style="margin-bottom:8px"><input type="checkbox" id="diceAfterDark"> 🌙 After Dark pack <span class="consent-note">(both consent)</span></label>
+          <div class="dice-result" id="diceResult">🎲 + 💋</div>
+          <div class="btn-row">
+            <button class="btn primary" id="diceRoll">Roll both dice</button>
+          </div>
+        </div>
+        <div class="panel">
+          <h3>💋 Kiss Roulette</h3>
+          <p class="panel-sub">One random kiss per spin. Collect the whole set.</p>
+          <div class="draw-result" id="kissResult">Ready when you are 😘</div>
+          <div class="btn-row">
+            <button class="btn primary" id="kissSpin">Spin a kiss</button>
+          </div>
+        </div>
+        <div class="panel">
+          <h3>🤔 Would You Rather — Us Edition</h3>
+          <label class="toggle" style="margin-bottom:8px"><input type="checkbox" id="wyrAfterDark"> 🌙 After Dark pack <span class="consent-note">(both consent)</span></label>
+          <p class="panel-sub">Answer together — and no dodging the question.</p>
+          <div class="draw-result" id="wyrResult">Would you rather…</div>
+          <div class="btn-row">
+            <button class="btn primary" id="wyrNext">Next</button>
+          </div>
+        </div>
+        <div class="panel">
+          <h3>⏱️ Seven Minutes</h3>
+          <p class="panel-sub">A classic: seven minutes, door closed, phones outside. The timer is the only rule.</p>
+          <div class="countdown" id="sevenDisplay">07:00</div>
+          <div class="btn-row">
+            <button class="btn primary" id="sevenStart">Start seven minutes</button>
+            <button class="btn ghost" id="sevenStop">Stop</button>
+          </div>
+        </div>
+      </div>
+      <div class="panel-row" style="margin-top:14px">
+        <div class="panel">
+          <h3>🌡️ Sensation Spinner</h3>
+          <p class="panel-sub">One spin picks a sensation, another picks where. The slower, the better.</p>
+          <div class="dice-result" id="sensResult">Spin to begin…</div>
+          <div class="btn-row">
+            <button class="btn primary" id="sensSpin">Spin a sensation</button>
+          </div>
+        </div>
+        <div class="panel">
+          <h3>🔮 Fantasy Builder</h3>
+          <p class="panel-sub">Blend one spark from each column into a scenario only the two of you share.</p>
+          <div class="dice-result" id="fantResult">Ready to blend…</div>
+          <div class="btn-row">
+            <button class="btn primary" id="fantBlend">Blend a fantasy</button>
+          </div>
+        </div>
+      </div>
+    </section>
+
+    <!-- Shared lists -->
+    <section class="tab" id="tab-lists">
+      <p class="consent-banner">🤝 Shared lists are only visible to both of you. Items require mutual opt-in before they're revealed — nothing appears until you've both agreed to explore it.</p>
+      <div class="panel-row" id="listPanels"></div>
+    </section>
+
+    <!-- Vault -->
+    <section class="tab" id="tab-vault">
+      <div class="panel">
+        <h3>🗝️ Personal Vault</h3>
+        <p class="panel-sub">Encrypted at rest with keys that never leave this device. Nothing here syncs to the cloud unless you both enable it.</p>
+        <div class="vault-stats">
+          <div class="vault-stat"><b id="vaultCount">4</b><span>items</span></div>
+          <div class="vault-stat"><b>AES-256</b><span>encryption</span></div>
+          <div class="vault-stat"><b>Off</b><span>cloud sync</span></div>
+        </div>
+        <div class="vault-grid" id="vaultGrid"></div>
+        <button class="btn primary" id="vaultAdd">+ Add encrypted item</button>
+      </div>
+    </section>
+
+    <!-- Mood calendar -->
+    <section class="tab" id="tab-mood">
+      <div class="panel">
+        <h3>📅 Mood &amp; Availability</h3>
+        <p class="panel-sub">Privately mark how you're feeling and when you're open for time together. Your partner only sees entries you choose to share.</p>
+        <div class="cal-head" id="calHead"></div>
+        <div class="cal-grid" id="calGrid"></div>
+        <div class="mood-legend">
+          <span><i class="dot" style="background:#e58aa0"></i> In the mood</span>
+          <span><i class="dot" style="background:#7fa8e0"></i> Just available</span>
+          <span><i class="dot" style="background:#9aa3ad"></i> Busy / need space</span>
+          <span><i class="dot" style="background:#67c587"></i> Date planned</span>
+        </div>
+      </div>
+    </section>
+  </main>
+</div>
+
+<div id="gameModal" class="modal hidden"><div class="modal-card" id="gameModalBody"></div></div>
+<div id="toast" class="toast hidden"></div>
+<script src="app.js"></script>
+</body>
+</html>
