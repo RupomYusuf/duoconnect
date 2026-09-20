@@ -24,8 +24,10 @@ function toast(text) {
    One partner creates a room code, the other joins with it. The connection is a
    peer-to-peer, end-to-end encrypted data channel — it works across the internet
    with no DuoConnect server. Both sides can act; both sides see. */
-const NET = { peer: null, conn: null, code: null, connected: false };
+const NET = { peer: null, conn: null, code: null, connected: false, named: false };
 const ROOM_PREFIX = "duoconnect-v1-";
+
+function partnerLabel() { return NET.named ? PLAYER_NAMES[1] : "your partner"; }
 
 function netSend(type, payload) {
   if (NET.connected && NET.conn && NET.conn.open) {
@@ -92,6 +94,7 @@ function netAttach(conn) {
   conn.on("open", () => {
     NET.connected = true;
     netChip();
+    netSend("hello", { name: PLAYER_NAMES[0] });
     toast("Partner linked — what you do, they see 💞");
   });
   conn.on("data", (d) => { if (d && d.type) netReceive(d.type, d.payload || {}); });
@@ -104,6 +107,12 @@ function netAttach(conn) {
 
 function netReceive(type, p) {
   switch (type) {
+    case "hello": {
+      NET.named = true;
+      setPartnerName(p.name);
+      toast(`${p.name} joined — names are now shared 💞`);
+      break;
+    }
     case "chat": {
       const msgs = store.get("chat", []);
       msgs.push({ from: "them", text: p.text, t: p.t, ephemeral: p.ephemeral });
@@ -129,19 +138,19 @@ function netReceive(type, p) {
       if (p.mood) marks[p.key] = p.mood; else delete marks[p.key];
       store.set("moods", marks);
       renderCalendar();
-      toast(`Partner marked a day on your shared calendar`);
+      toast(`${partnerLabel()} marked a day on your shared calendar`);
       break;
     }
     case "list": {
       store.set("list_" + p.id, p.items);
       renderLists();
-      toast("Partner updated a shared list");
+      toast(`${partnerLabel()} updated a shared list`);
       break;
     }
     case "countdown": {
       clearInterval(cdTimer);
       let remain = p.minutes * 60;
-      if (p.hint) toast(`Partner sent a hint: “${p.hint}”`);
+      if (p.hint) toast(`${partnerLabel()} sent a hint: “${p.hint}”`);
       const tick = () => {
         const el = $("#countdownDisplay");
         if (!el) return;
@@ -157,7 +166,7 @@ function netReceive(type, p) {
       clearInterval(sevenTimer);
       if (!p.on) { $("#sevenDisplay").textContent = "07:00"; break; }
       let remain = 7 * 60;
-      toast("Partner started Seven Minutes ⏱️");
+      toast(`${partnerLabel()} started Seven Minutes ⏱️`);
       const tick = () => {
         const el = $("#sevenDisplay");
         if (!el) return;
@@ -178,7 +187,7 @@ function netReceive(type, p) {
         id: p.id, kind: "snap", from: "them", img: p.img, t: p.t,
         expiresAt: p.minutes ? Date.now() + p.minutes * 60000 : null
       });
-      toast("📸 New snap from your partner");
+      toast(`📸 New snap from ${partnerLabel()}`);
       break;
     }
     case "dareRequest": {
@@ -191,14 +200,14 @@ function netReceive(type, p) {
       const list = snapsList();
       const entry = list.find(s => s.id === p.id);
       if (entry) { entry.status = "fulfilled"; saveSnaps(list); renderSnaps(); }
-      toast("They fulfilled your dare 👀");
+      toast(`${partnerLabel()} fulfilled your dare 👀`);
       break;
     }
     case "dareDeclined": {
       const list = snapsList();
       const entry = list.find(s => s.id === p.id);
       if (entry) { entry.status = "declined"; saveSnaps(list); renderSnaps(); }
-      toast("They declined 🤍 — never ask twice");
+      toast(`${partnerLabel()} declined 🤍 — never ask twice`);
       break;
     }
     case "tab": {
@@ -206,7 +215,7 @@ function netReceive(type, p) {
         const btn = $$(".subnav-btn").find(b => b.dataset.tab === p.tab);
         if (btn) btn.click();
       } else {
-        toast("Partner is in their Private Space 🔒");
+        toast(`${partnerLabel()} is in their Private Space 🔒`);
       }
       break;
     }
@@ -226,6 +235,7 @@ $("#linkChip").addEventListener("click", () => {
   openModal(`
     <h3>💞 Couple Link</h3>
     <p class="panel-sub">Link your two devices over the internet — direct, encrypted, no account needed. One creates a code, the other joins.</p>
+    <input type="text" id="netName" placeholder="Your name (so your partner knows it's you)" value="${(PLAYER_NAMES[0] && PLAYER_NAMES[0] !== "Alex") ? PLAYER_NAMES[0] : ""}" autocomplete="off" style="margin-bottom:10px">
     <button class="btn primary" id="netCreate" style="width:100%;margin-bottom:10px">Create a room code</button>
     <div id="netCreateBox" class="hidden" style="margin-bottom:14px">
       <div class="dice-result" id="netCode" style="font-size:26px"></div>
@@ -236,6 +246,8 @@ $("#linkChip").addEventListener("click", () => {
       <button class="btn primary" id="netJoinBtn">Join</button>
     </div>`);
   $("#netCreate").addEventListener("click", () => {
+    const name = $("#netName").value.trim() || "Me";
+    setMyName(name);
     $("#netCreateBox").classList.remove("hidden");
     const code = randomCode(5);
     $("#netCode").textContent = code;
@@ -244,6 +256,8 @@ $("#linkChip").addEventListener("click", () => {
   $("#netJoinBtn").addEventListener("click", () => {
     const code = $("#netJoinCode").value.trim();
     if (code.length < 4) return toast("Enter the code your partner shared");
+    const name = $("#netName").value.trim() || "Me";
+    setMyName(name);
     netJoin(code);
   });
 });
@@ -388,7 +402,21 @@ $("#gameGrid").addEventListener("click", (e) => {
   if (card && GAMES[card.dataset.game]) GAMES[card.dataset.game]();
 });
 
-const PLAYER_NAMES = ["Alex", "Jordan"];
+const PLAYER_NAMES = ["Alex", "Jordan"]; // [you, partner] — replaced with real names on link
+function setMyName(name) {
+  PLAYER_NAMES[0] = name || "You";
+  store.set("playerNames", PLAYER_NAMES);
+}
+function setPartnerName(name) {
+  PLAYER_NAMES[1] = name || PLAYER_NAMES[1];
+  store.set("playerNames", PLAYER_NAMES);
+  updatePartnerUI();
+}
+function updatePartnerUI() {
+  const title = $("#chatTitle");
+  if (title) title.textContent = "Encrypted chat with " + PLAYER_NAMES[1];
+  renderSnaps();
+}
 
 /* ---- Modal plumbing ---- */
 function openModal(html) {
@@ -1156,7 +1184,7 @@ function fmt(sec) {
 function startCountdown(minutes, hint) {
   clearInterval(cdTimer);
   let remain = minutes * 60;
-  if (hint) toast(`Hint sent to your partner: “${hint}”`);
+  if (hint) toast(`Hint sent to ${partnerLabel()}: “${hint}”`);
   const tick = () => {
     const el = $("#countdownDisplay");
     if (!el) return;
@@ -1316,7 +1344,7 @@ function renderSnaps() {
              </div>`
           : `<p class="snap-dare-text">You dared: "${s.text}"</p><p class="panel-sub" style="text-align:center">waiting for their answer…</p>`;
       } else if (s.status === "declined") {
-        body = `<p class="snap-dare-text">"${s.text}"</p><p class="panel-sub" style="text-align:center">${incoming ? "you declined — all good 🤍" : "they declined — never ask twice 🤍"}</p>`;
+        body = `<p class="snap-dare-text">"${s.text}"</p><p class="panel-sub" style="text-align:center">${incoming ? "you declined — all good 🤍" : PLAYER_NAMES[1] + " declined — never ask twice 🤍"}</p>`;
       } else if (s.status === "fulfilled") {
         body = `<p class="snap-dare-text">"${s.text}"</p><p class="panel-sub" style="text-align:center">${incoming ? "they sent it 👀" : "you fulfilled it 💕"}</p>`;
       }
@@ -1324,7 +1352,7 @@ function renderSnaps() {
     }
     return `<div class="snap-card">
       <img src="${s.img}" alt="snap" class="snap-img">
-      <span class="snap-when">${s.from === "them" ? "from partner" : "from you"} · ${when}${s.expiresAt ? " · auto-deletes" : ""}</span>
+      <span class="snap-when">${s.from === "them" ? "from " + PLAYER_NAMES[1] : "from you"} · ${when}${s.expiresAt ? " · auto-deletes" : ""}</span>
     </div>`;
   }).join("");
 }
@@ -1582,6 +1610,11 @@ renderPinPad();
 purgeSnaps();
 renderSnaps();
 unlockSnapDares();
+{
+  const saved = store.get("playerNames", null);
+  if (saved) { PLAYER_NAMES[0] = saved[0] || PLAYER_NAMES[0]; PLAYER_NAMES[1] = saved[1] || PLAYER_NAMES[1]; }
+  updatePartnerUI();
+}
 $("#spinnerOptions").value = spinnerOptions().join("\n");
 renderSavedStarters();
 renderMilestones();
