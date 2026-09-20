@@ -460,24 +460,100 @@ function netReceive(type, p) {
   }
 }
 
-/* ---- Couple Link modal ---- */
-$("#linkChip").addEventListener("click", () => {
-  if (NET.connected || NET.peer) {
-    openModal(`
-      <h3>💞 Couple Link</h3>
-      <p class="panel-sub">Room <b>${NET.code || "—"}</b> · ${NET.connected ? "partner linked. Everything you do on this device updates theirs live — both of you can control." : "waiting for partner to join…"}</p>
-      <button class="btn ghost" id="netDisconnect">Disconnect</button>`);
-    $("#netDisconnect").addEventListener("click", () => { netTeardown(); closeModal(); });
-    return;
+/* ---- Fixed couple pairing: log in once with emails, connect automatically ---- */
+function coupleEmails() {
+  return { me: store.get("myEmail", ""), partner: store.get("partnerEmail", "") };
+}
+
+function roomKeyFor(a, b) {
+  const pair = [a.toLowerCase().trim(), b.toLowerCase().trim()].sort().join("|");
+  let h1 = 0x811c9dc5, h2 = 0x01000193;
+  for (let i = 0; i < pair.length; i++) {
+    h1 ^= pair.charCodeAt(i); h1 = Math.imul(h1, 0x01000193);
+    h2 ^= pair.charCodeAt(i); h2 = Math.imul(h2, 0x85ebca6b);
   }
+  return ((h1 >>> 0).toString(16) + (h2 >>> 0).toString(16)).padStart(16, "0");
+}
+
+function autoConnect() {
+  const { me, partner } = coupleEmails();
+  if (!me || !partner) return false;
+  if (NET.linked || NET.peer || mqttClients.length) return true;
+  const host = me.toLowerCase().trim() < partner.toLowerCase().trim();
+  netStart(roomKeyFor(me, partner), host);
+  return true;
+}
+
+/* ---- Couple Link UI ---- */
+$("#linkChip").addEventListener("click", () => {
+  const { me, partner } = coupleEmails();
+  if (!me || !partner) return openSetupModal();
   openModal(`
-    <h3>💞 Couple Link</h3>
-    <p class="panel-sub">Link your two devices over the internet — direct, encrypted, no account needed. One creates a code, the other joins.</p>
-    <input type="text" id="netName" placeholder="Your name (so your partner knows it's you)" value="${(PLAYER_NAMES[0] && PLAYER_NAMES[0] !== "Alex") ? PLAYER_NAMES[0] : ""}" autocomplete="off" style="margin-bottom:10px">
+    <h3>💞 Your couple space</h3>
+    <p class="panel-sub">
+      You: <b>${me}</b> (${PLAYER_NAMES[0]})<br>
+      Partner: <b>${partner}</b> (${NET.named ? PLAYER_NAMES[1] : PLAYER_NAMES[1]})
+    </p>
+    <p class="panel-sub" id="autoStatus">${NET.connected ? "✅ Linked right now" : (NET.peer || mqttClients.length) ? "⏳ Connecting…" : "Not connected — tap reconnect"}</p>
+    <div class="btn-row" style="justify-content:center">
+      <button class="btn primary" id="suReconnect">Reconnect now</button>
+      <button class="btn ghost" id="suEdit">Change details</button>
+    </div>
+    <details style="margin-top:14px"><summary style="color:var(--muted);font-size:13px">Advanced: one-time room code</summary>
+      <div style="margin-top:10px"><button class="btn ghost small" id="suManual" style="width:100%">Use a room code instead</button></div>
+    </details>`);
+  $("#suReconnect").addEventListener("click", () => {
+    netTeardown();
+    closeModal();
+    autoConnect();
+  });
+  $("#suEdit").addEventListener("click", () => { netTeardown(); closeModal(); openSetupModal(); });
+  $("#suManual").addEventListener("click", () => { netTeardown(); openCodeModal(); });
+});
+
+function openSetupModal() {
+  const { me, partner } = coupleEmails();
+  const saved = store.get("playerNames", ["", ""]);
+  openModal(`
+    <h3>💞 Set up your couple — one time only</h3>
+    <p class="panel-sub">Each of you does this once on your own phone. After that, opening the app connects you two automatically — no codes, ever.</p>
+    <input type="text" id="suName" placeholder="Your name" value="${me ? PLAYER_NAMES[0] : ""}" autocomplete="off" style="margin-bottom:8px">
+    <input type="email" id="suEmail" placeholder="Your email (e.g. rupom@gmail.com)" value="${me}" autocomplete="off" style="margin-bottom:8px">
+    <input type="text" id="suPName" placeholder="Partner's name" value="${partner ? PLAYER_NAMES[1] : ""}" autocomplete="off" style="margin-bottom:8px">
+    <input type="email" id="suPEmail" placeholder="Partner's email (e.g. choa@gmail.com)" value="${partner}" autocomplete="off" style="margin-bottom:12px">
+    <button class="btn primary" id="suGo" style="width:100%">Save & connect us 💞</button>
+    <p class="panel-sub" style="margin-top:10px">Your two emails create your private room — the emails must match what your partner types for <b>you</b>.</p>
+    <details style="margin-top:6px"><summary style="color:var(--muted);font-size:13px">Advanced: one-time room code</summary>
+      <div style="margin-top:10px"><button class="btn ghost small" id="suManual2" style="width:100%">Use a room code instead</button></div>
+    </details>`);
+  $("#suGo").addEventListener("click", () => {
+    const name = $("#suName").value.trim();
+    const email = $("#suEmail").value.trim();
+    const pname = $("#suPName").value.trim();
+    const pemail = $("#suPEmail").value.trim();
+    if (!/@/.test(email) || !/@/.test(pemail)) return toast("Both emails are needed — that's how your rooms match");
+    if (email.toLowerCase() === pemail.toLowerCase()) return toast("Partner's email must be different from yours");
+    store.set("myEmail", email);
+    store.set("partnerEmail", pemail);
+    setMyName(name || "Me");
+    PLAYER_NAMES[1] = pname || PLAYER_NAMES[1];
+    store.set("playerNames", PLAYER_NAMES);
+    updatePartnerUI();
+    closeModal();
+    autoConnect();
+  });
+  $("#suManual2").addEventListener("click", () => openCodeModal());
+}
+
+/* ---- Manual room-code path (advanced) ---- */
+function openCodeModal() {
+  openModal(`
+    <h3>🔗 One-time room code</h3>
+    <p class="panel-sub">Temporary link — for the permanent setup, go back and use your emails.</p>
     <button class="btn primary" id="netCreate" style="width:100%;margin-bottom:10px">Create a room code</button>
     <div id="netCreateBox" class="hidden" style="margin-bottom:14px">
       <div class="dice-result" id="netCode" style="font-size:26px"></div>
-      <p class="panel-sub" style="text-align:center">Share this code with your partner — they tap “Join”.<br><b>Keep this screen open and stay on the app</b> — switching away can put the room to sleep. The joiner retries for up to 90 seconds.</p>
+      <p class="panel-sub" style="text-align:center">Share this code — they tap “Join”.<br><b>Keep this screen open</b> — the joiner retries for 90s.</p>
     </div>
     <div class="btn-row">
       <input type="text" id="netJoinCode" placeholder="Join code (e.g. K7X2M)" style="text-transform:uppercase" maxlength="5" autocomplete="off">
@@ -486,8 +562,6 @@ $("#linkChip").addEventListener("click", () => {
     <p class="panel-sub" id="netJoinStatus" style="text-align:center;margin-top:8px;min-height:18px"></p>
     <div class="net-doctor" id="netDoctor"></div>`);
   $("#netCreate").addEventListener("click", () => {
-    const name = $("#netName").value.trim() || "Me";
-    setMyName(name);
     $("#netCreateBox").classList.remove("hidden");
     const code = randomCode(5);
     $("#netCode").textContent = code;
@@ -496,12 +570,10 @@ $("#linkChip").addEventListener("click", () => {
   $("#netJoinBtn").addEventListener("click", () => {
     const code = $("#netJoinCode").value.trim();
     if (code.length < 4) return toast("Enter the code your partner shared");
-    const name = $("#netName").value.trim() || "Me";
-    setMyName(name);
     $("#netJoinStatus").textContent = `Connecting to ${code.toUpperCase()} — hold on…`;
     netJoin(code);
   });
-});
+}
 
 /* ================= Private Space gate ================= */
 const PIN_KEY = "pin";
@@ -1856,6 +1928,8 @@ unlockSnapDares();
   if (saved) { PLAYER_NAMES[0] = saved[0] || PLAYER_NAMES[0]; PLAYER_NAMES[1] = saved[1] || PLAYER_NAMES[1]; }
   updatePartnerUI();
 }
+// connect the fixed couple automatically; first visit opens the one-time setup
+if (!autoConnect()) setTimeout(openSetupModal, 600);
 $("#spinnerOptions").value = spinnerOptions().join("\n");
 renderSavedStarters();
 renderMilestones();
