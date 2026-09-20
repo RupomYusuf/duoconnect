@@ -24,10 +24,19 @@ function toast(text) {
    One partner creates a room code, the other joins with it. The connection is a
    peer-to-peer, end-to-end encrypted data channel — it works across the internet
    with no DuoConnect server. Both sides can act; both sides see. */
-const NET = { peer: null, conn: null, code: null, connected: false, named: false, joinTimeout: null };
+const NET = { peer: null, conn: null, code: null, connected: false, named: false,
+              joinTimeout: null, joining: false, joinAttempts: 0, wakeLock: null };
 const ROOM_PREFIX = "duoconnect-v1-";
 
 function partnerLabel() { return NET.named ? PLAYER_NAMES[1] : "your partner"; }
+
+async function requestWakeLock() {
+  try { NET.wakeLock = await navigator.wakeLock.request("screen"); } catch {}
+}
+function releaseWakeLock() {
+  try { NET.wakeLock && NET.wakeLock.release(); } catch {}
+  NET.wakeLock = null;
+}
 
 /* STUN finds a direct path; TURN relays traffic when both partners are behind
    strict/carrier NATs (the usual reason "different places" failed before). */
@@ -77,6 +86,8 @@ function netJoin(code) {
 
 function netTeardown() {
   if (NET.joinTimeout) { clearTimeout(NET.joinTimeout); NET.joinTimeout = null; }
+  NET.joining = false;
+  releaseWakeLock();
   if (NET.conn) { try { NET.conn.close(); } catch {} }
   if (NET.peer) { try { NET.peer.destroy(); } catch {} }
   NET.conn = NET.peer = null;
@@ -87,39 +98,76 @@ function netTeardown() {
 function netStart(code, host) {
   if (typeof Peer === "undefined") return toast("Link library failed to load — check your internet, then reload the page");
   NET.code = code;
+  NET.joining = !host;
+  NET.joinAttempts = 0;
   netStatus("Connecting…");
+  requestWakeLock();
   NET.peer = new Peer(host ? ROOM_PREFIX + code : undefined, PEER_CONFIG);
   NET.peer.on("open", () => {
+    if (NET.connected) return; // re-open after reconnect while already linked
     if (host) {
-      netStatus(`Room ${code} — waiting for partner…`);
+      netStatus(`Room ${code} — waiting for partner… keep this screen open`);
       netChip();
     } else {
-      const c = NET.peer.connect(ROOM_PREFIX + code, { reliable: true });
-      NET.joinTimeout = setTimeout(() => {
-        if (!NET.connected) {
-          toast("Couldn't reach the room in 20s — double-check the code, or have your partner create a new room");
-          netTeardown();
-        }
-      }, 20000);
-      netAttach(c);
+      tryConnect(code);
     }
+  });
+  // the signaling socket can silently drop (mobile especially) — re-register the room
+  NET.peer.on("disconnected", () => {
+    if (!NET.peer || NET.peer.destroyed) return;
+    netStatus("Reconnecting to room service…");
+    NET.peer.reconnect();
   });
   NET.peer.on("connection", (c) => netAttach(c));
   NET.peer.on("error", (err) => {
+    if (err.type === "peer-unavailable" && NET.joining) return; // handled by the retry loop
     if (err.type === "unavailable-id") toast("That room code is already in use — make a new one");
     else if (err.type === "peer-unavailable") toast("No live room found with that code — ask your partner to keep their tab open");
     else if (err.type === "browser-incompatible") toast("This browser can't do direct links — try Chrome, Edge or Safari");
-    else if (err.type === "network" || err.type === "server-error" || err.type === "socket-error") toast("Signaling server unreachable — check your internet and try again");
+    else if (err.type === "network" || err.type === "server-error" || err.type === "socket-error") toast("Signaling server unreachable — checking again in a moment…");
     else toast("Link error: " + err.type);
-    netTeardown();
+    if (err.type !== "network" && err.type !== "server-error" && err.type !== "socket-error") netTeardown();
   });
   if (host) netChip();
+  if (NET.joinTimeout) clearTimeout(NET.joinTimeout);
+  NET.joinTimeout = setTimeout(() => {
+    if (!NET.connected && NET.joining) {
+      toast("Couldn't reach the room in 90s — make a fresh room on both sides (old rooms expire)");
+      netTeardown();
+    }
+  }, 90000);
 }
+
+/* Joiner: retry the handshake every 4s for up to 90s — the host's tab may be
+   waking back up or re-registering, so one "not found" shouldn't be final. */
+function tryConnect(code) {
+  if (!NET.joining || !NET.peer || NET.peer.destroyed) return;
+  if (NET.peer.disconnected) { NET.peer.reconnect(); return; }
+  NET.joinAttempts++;
+  if (NET.joinAttempts > 1) {
+    netStatus(`Room ${code} — partner not answering yet, retry ${NET.joinAttempts}…`);
+  }
+  const c = NET.peer.connect(ROOM_PREFIX + code, { reliable: true });
+  netAttach(c);
+}
+setInterval(() => {
+  if (NET.joining && !NET.connected && NET.peer && !NET.peer.destroyed) {
+    tryConnect(NET.code);
+  }
+}, 4000);
+
+// when the page becomes visible again, revive a dropped signaling socket
+document.addEventListener("visibilitychange", () => {
+  if (document.visibilityState === "visible" && NET.peer && !NET.peer.destroyed && NET.peer.disconnected) {
+    NET.peer.reconnect();
+  }
+});
 
 function netAttach(conn) {
   NET.conn = conn;
   conn.on("open", () => {
     if (NET.joinTimeout) { clearTimeout(NET.joinTimeout); NET.joinTimeout = null; }
+    NET.joining = false;
     NET.connected = true;
     netChip();
     closeModal();
@@ -137,6 +185,7 @@ function netAttach(conn) {
   });
   conn.on("data", (d) => { if (d && d.type) netReceive(d.type, d.payload || {}); });
   conn.on("error", (err) => {
+    if (err && err.type === "peer-unavailable" && NET.joining) return; // retry loop handles it
     toast("Link trouble: " + (err && err.type ? err.type : "connection lost"));
     netTeardown();
   });
@@ -282,7 +331,7 @@ $("#linkChip").addEventListener("click", () => {
     <button class="btn primary" id="netCreate" style="width:100%;margin-bottom:10px">Create a room code</button>
     <div id="netCreateBox" class="hidden" style="margin-bottom:14px">
       <div class="dice-result" id="netCode" style="font-size:26px"></div>
-      <p class="panel-sub" style="text-align:center">Share this code with your partner — they tap “Join”.</p>
+      <p class="panel-sub" style="text-align:center">Share this code with your partner — they tap “Join”.<br><b>Keep this screen open and stay on the app</b> — switching away can put the room to sleep. The joiner retries for up to 90 seconds.</p>
     </div>
     <div class="btn-row">
       <input type="text" id="netJoinCode" placeholder="Join code (e.g. K7X2M)" style="text-transform:uppercase" maxlength="5" autocomplete="off">
