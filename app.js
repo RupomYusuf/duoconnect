@@ -40,43 +40,87 @@ function releaseWakeLock() {
   NET.wakeLock = null;
 }
 
-/* ---- Backup transport: public MQTT relay ---------------------------------
-   WebRTC can fail between strict carrier NATs even with TURN. This relay runs
-   over an outbound WebSocket, so it works from any network. It only carries
-   app messages — it is NOT end-to-end encrypted like the direct link. */
-let mqttClient = null;
+/* ---- Backup transport: public MQTT relays ---------------------------------
+   WebRTC can fail between strict carrier NATs even with TURN. These relays run
+   over outbound WebSockets, so they work from any network. Three independent
+   public brokers are raced in parallel; if one is blocked, another still works.
+   They only carry app messages — NOT end-to-end encrypted like the direct link. */
+const MQTT_BROKERS = [
+  "wss://broker.emqx.io:8084/mqtt",
+  "wss://broker.hivemq.com:8884/mqtt",
+  "wss://test.mosquitto.org:8081"
+];
+let mqttClients = [];
+let mqttMsgSeq = 0;
+
+const DOCTOR = {};
+function doctorTick(key, state) { // state: "ok" | "fail" | "wait"
+  DOCTOR[key] = state;
+  renderDoctor();
+}
+function renderDoctor() {
+  const el = $("#netDoctor");
+  if (!el) return;
+  const rows = [
+    ["lib", "Link libraries loaded"],
+    ["signal", "Direct-link service reached"],
+    ["relay", "Backup relay server reached"],
+    ["room", NET.isHost ? "You are hosting the room" : "Partner's room is live"],
+    ["tunnel", NET.transport === "mqtt" && DOCTOR.tunnel === "ok" ? "Linked via backup relay" : "Connected"]
+  ];
+  el.innerHTML = rows.map(([k, label]) => {
+    const st = DOCTOR[k] || "wait";
+    const icon = st === "ok" ? "✅" : st === "fail" ? "❌" : "⏳";
+    return `<div class="doc-row doc-${st}"><span>${icon}</span> ${label}</div>`;
+  }).join("");
+}
 
 function mqttStart(code, isJoiner) {
-  if (typeof mqtt === "undefined" || mqttClient) return;
-  try {
-    mqttClient = mqtt.connect("wss://broker.emqx.io:8084/mqtt", {
-      clientId: "duo_" + Math.random().toString(16).slice(2, 10),
-      reconnectPeriod: 3000, connectTimeout: 8000, keepalive: 30
-    });
-  } catch { return; }
+  if (typeof mqtt === "undefined" || mqttClients.length) return;
   NET.mqttTopic = ROOM_PREFIX + code;
-  mqttClient.on("connect", () => {
-    mqttClient.subscribe(NET.mqttTopic);
-    if (isJoiner) mqttPublish({ t: "join-req", name: PLAYER_NAMES[0] });
-  });
-  mqttClient.on("message", (t, msg) => {
-    let d; try { d = JSON.parse(msg.toString()); } catch { return; }
-    if (d.n === NET.nonce) return; // our own echo
-    mqttReceive(d);
+  NET.seenIds = new Set();
+  let anyConnected = false;
+  MQTT_BROKERS.forEach(url => {
+    let c;
+    try {
+      c = mqtt.connect(url, {
+        clientId: "duo_" + Math.random().toString(16).slice(2, 10),
+        reconnectPeriod: 4000, connectTimeout: 8000, keepalive: 30
+      });
+    } catch { return; }
+    mqttClients.push(c);
+    c.on("connect", () => {
+      c.subscribe(NET.mqttTopic);
+      if (!anyConnected) { anyConnected = true; doctorTick("relay", "ok"); }
+      if (isJoiner && !NET.linked) mqttPublish({ t: "join-req", name: PLAYER_NAMES[0] });
+    });
+    c.on("message", (t, msg) => {
+      let d; try { d = JSON.parse(msg.toString()); } catch { return; }
+      if (d.n === NET.nonce) return; // our own echo
+      if (d.i != null) { if (NET.seenIds.has(d.i)) return; NET.seenIds.add(d.i); }
+      mqttReceive(d);
+    });
+    c.on("error", () => {}); // other brokers cover it
   });
 }
 
 function mqttPublish(obj) {
-  if (mqttClient && mqttClient.connected) {
-    mqttClient.publish(NET.mqttTopic, JSON.stringify({ ...obj, n: NET.nonce }));
-  }
+  obj.i = ++mqttMsgSeq;
+  const body = JSON.stringify({ ...obj, n: NET.nonce });
+  mqttClients.forEach(c => { if (c.connected) c.publish(NET.mqttTopic, body); });
 }
 
 function mqttStop() {
-  if (mqttClient) { try { mqttClient.end(true); } catch {} mqttClient = null; }
+  mqttClients.forEach(c => { try { c.end(true); } catch {} });
+  mqttClients = [];
 }
 
 function mqttReceive(d) {
+  if (d.t === "room-alive" && NET.joining && !NET.linked) {
+    NET.roomAliveAt = Date.now();
+    doctorTick("room", "ok");
+    return;
+  }
   if (d.t === "join-req") {
     if (!NET.linked && NET.isHost) {
       linkVia("mqtt");
@@ -99,6 +143,7 @@ function linkVia(transport) {
   NET.transport = transport;
   NET.connected = true;
   NET.joining = false;
+  doctorTick("tunnel", "ok");
   if (NET.joinTimeout) { clearTimeout(NET.joinTimeout); NET.joinTimeout = null; }
   netChip();
   closeModal();
@@ -155,7 +200,8 @@ function netJoin(code) {
 }
 
 function netTeardown() {
-  if (NET.joinTimeout) { clearTimeout(NET.joinTimeout); NET.joinTimeout = null; }
+  if (NET.joinTimeout) { clearInterval(NET.joinTimeout); NET.joinTimeout = null; }
+  if (NET.aliveInterval) { clearInterval(NET.aliveInterval); NET.aliveInterval = null; }
   NET.joining = false;
   releaseWakeLock();
   mqttStop();
@@ -175,19 +221,25 @@ function netStart(code, host) {
   NET.transport = "rtc";
   NET.joining = !host;
   NET.joinAttempts = 0;
+  NET.roomAliveAt = 0;
+  Object.keys(DOCTOR).forEach(k => delete DOCTOR[k]);
+  doctorTick("lib", (typeof Peer !== "undefined" || typeof mqtt !== "undefined") ? "ok" : "fail");
   netStatus("Connecting…");
   requestWakeLock();
-  // backup relay starts immediately on both sides — whichever path links first wins
+  // backup relays start immediately on both sides — whichever path links first wins
   mqttStart(code, !host);
   try {
+    if (typeof Peer === "undefined") throw new Error("no lib");
     NET.peer = new Peer(host ? ROOM_PREFIX + code : undefined, PEER_CONFIG);
   } catch (e) {
-    if (mqttClient) return; // backup relay will carry the link
+    doctorTick("signal", "fail");
+    if (mqttClients.length) return; // backup relay will carry the link
     toast("This browser can't do direct links — try Chrome, Edge or Safari");
     netTeardown();
     return;
   }
   NET.peer.on("open", () => {
+    doctorTick("signal", "ok");
     if (NET.connected || NET.linked) return;
     if (host) {
       netStatus(`Room ${code} — waiting for partner… keep this screen open`);
@@ -199,13 +251,15 @@ function netStart(code, host) {
   // the signaling socket can silently drop (mobile especially) — re-register the room
   NET.peer.on("disconnected", () => {
     if (!NET.peer || NET.peer.destroyed || NET.linked) return;
+    doctorTick("signal", "wait");
     netStatus("Reconnecting to room service…");
     NET.peer.reconnect();
   });
   NET.peer.on("connection", (c) => netAttach(c));
   NET.peer.on("error", (err) => {
     if (err.type === "peer-unavailable" && NET.joining) return; // handled by the retry loop
-    if (mqttClient && !NET.linked) return; // backup relay will carry the link instead
+    if (err.type !== "peer-unavailable") doctorTick("signal", "fail");
+    if (mqttClients.length && !NET.linked) return; // backup relay will carry the link instead
     if (err.type === "unavailable-id") toast("That room code is already in use — make a new one");
     else if (err.type === "peer-unavailable") toast("No live room found with that code — ask your partner to keep their tab open");
     else if (err.type === "browser-incompatible") toast("This browser can't do direct links — try Chrome, Edge or Safari");
@@ -213,7 +267,13 @@ function netStart(code, host) {
     else toast("Link error: " + err.type);
     netTeardown();
   });
-  if (host) netChip();
+  if (host) {
+    netChip();
+    // liveness beacon: the joiner's doctor shows whether this room is reachable
+    NET.aliveInterval = setInterval(() => {
+      if (NET.code && !NET.peer?.destroyed) mqttPublish({ t: "room-alive" });
+    }, 3000);
+  }
   if (!host) {
     // if the direct path is stalling, tell the user the backup is taking over
     setTimeout(() => {
@@ -221,12 +281,20 @@ function netStart(code, host) {
     }, 8000);
   }
   if (NET.joinTimeout) clearTimeout(NET.joinTimeout);
-  NET.joinTimeout = setTimeout(() => {
-    if (!NET.linked && NET.joining) {
+  NET.joinTimeout = setInterval(() => {
+    if (NET.linked || !NET.joining) return;
+    if (NET.roomAliveAt && Date.now() - NET.roomAliveAt > 12000) {
+      doctorTick("room", "fail");
+    }
+    if (!NET.roomAliveAt && Date.now() - NET._startAt > 15000) {
+      doctorTick("room", "fail");
+    }
+    if (!NET.linked && Date.now() - (NET._startAt || Date.now()) > 90000) {
       toast("Couldn't link in 90s — make a fresh room on both sides (old rooms expire)");
       netTeardown();
     }
-  }, 90000);
+  }, 3000);
+  NET._startAt = Date.now();
 }
 
 /* Joiner: keep retrying the WebRTC handshake — the host's tab may be waking up. */
@@ -415,7 +483,8 @@ $("#linkChip").addEventListener("click", () => {
       <input type="text" id="netJoinCode" placeholder="Join code (e.g. K7X2M)" style="text-transform:uppercase" maxlength="5" autocomplete="off">
       <button class="btn primary" id="netJoinBtn">Join</button>
     </div>
-    <p class="panel-sub" id="netJoinStatus" style="text-align:center;margin-top:8px;min-height:18px"></p>`);
+    <p class="panel-sub" id="netJoinStatus" style="text-align:center;margin-top:8px;min-height:18px"></p>
+    <div class="net-doctor" id="netDoctor"></div>`);
   $("#netCreate").addEventListener("click", () => {
     const name = $("#netName").value.trim() || "Me";
     setMyName(name);

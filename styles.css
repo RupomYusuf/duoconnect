@@ -96,6 +96,13 @@ body[data-mode="private"] .avatar { border-color: var(--private-surface); }
 }
 body[data-mode="private"] .link-chip { background: var(--private-surface); border-color: var(--private-border); color: var(--private-muted); }
 body[data-mode="private"] .link-chip.on { background: #2c7a4b; border-color: #2c7a4b; color: #fff; }
+.net-doctor { text-align: left; font-size: 12.5px; margin-top: 12px; border-top: 1px dashed var(--border); padding-top: 8px; }
+.doc-row { padding: 3px 0; color: var(--muted); }
+.doc-row.doc-ok { color: #2c7a4b; }
+.doc-row.doc-fail { color: #d64550; }
+body[data-mode="private"] .doc-row { color: var(--private-muted); }
+body[data-mode="private"] .doc-row.doc-ok { color: #8fd9a8; }
+body[data-mode="private"] .doc-row.doc-fail { color: #ff8fa3; }
 
 /* ---- Views ---- */
 .view { display: none; }
