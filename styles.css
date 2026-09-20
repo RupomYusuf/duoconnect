@@ -104,6 +104,21 @@ body[data-mode="private"] .doc-row { color: var(--private-muted); }
 body[data-mode="private"] .doc-row.doc-ok { color: #8fd9a8; }
 body[data-mode="private"] .doc-row.doc-fail { color: #ff8fa3; }
 
+/* ---- Login cards ---- */
+.login-cards { display: flex; gap: 10px; margin-bottom: 14px; }
+.login-card {
+  flex: 1; display: flex; align-items: center; gap: 10px; text-align: left;
+  background: var(--accent-soft); border: 2px solid transparent; border-radius: 14px;
+  padding: 12px; font: inherit; color: inherit;
+}
+body[data-mode="private"] .login-card, .modal-card .login-card { background: #241c28; }
+.login-card.picked { border-color: var(--accent); }
+.login-card small { color: var(--muted); font-size: 11px; }
+.login-avatar {
+  width: 40px; height: 40px; border-radius: 50%; color: #fff; flex-shrink: 0;
+  display: inline-flex; align-items: center; justify-content: center; font-weight: 800; font-size: 16px;
+}
+
 /* ---- Views ---- */
 .view { display: none; }
 .view.active { display: block; }

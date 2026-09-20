@@ -242,7 +242,7 @@ function netStart(code, host) {
     doctorTick("signal", "ok");
     if (NET.connected || NET.linked) return;
     if (host) {
-      netStatus(`Room ${code} — waiting for partner… keep this screen open`);
+      netStatus(NET.waitingFor ? `⏳ Waiting for ${NET.waitingFor} to log in…` : `Room ${code} — waiting for partner… keep this screen open`);
       netChip();
     } else {
       tryConnect(code);
@@ -314,6 +314,18 @@ setInterval(() => {
     mqttPublish({ t: "join-req", name: PLAYER_NAMES[0] });
   }
 }, 4000);
+// watchdog: if the active link silently dies, un-link and re-run the pairing handshake
+setInterval(() => {
+  if (!NET.linked || !NET.connected || NET.transport !== "rtc") return;
+  if (!NET.conn || !NET.conn.open) {
+    NET.linked = false;
+    NET.connected = false;
+    NET.joining = true;
+    NET.named = false;
+    netChip();
+    toast("Link lost — reconnecting automatically…");
+  }
+}, 5000);
 
 function setJoinStatus(text) {
   netStatus(text);
@@ -461,6 +473,12 @@ function netReceive(type, p) {
 }
 
 /* ---- Fixed couple pairing: log in once with emails, connect automatically ---- */
+const ACCOUNTS = {
+  "choa@gmail.com":  { name: "Choа",  pass: "CHOA"  },
+  "rupom@gmail.com": { name: "Rupom", pass: "RUPOM" }
+};
+const PARTNER_OF = { "choa@gmail.com": "rupom@gmail.com", "rupom@gmail.com": "choa@gmail.com" };
+
 function coupleEmails() {
   return { me: store.get("myEmail", ""), partner: store.get("partnerEmail", "") };
 }
@@ -484,65 +502,85 @@ function autoConnect() {
   return true;
 }
 
+function loginAs(email) {
+  NET.waitingFor = ACCOUNTS[PARTNER_OF[email]].name;
+  store.set("myEmail", email);
+  store.set("partnerEmail", PARTNER_OF[email]);
+  setMyName(ACCOUNTS[email].name);
+  PLAYER_NAMES[1] = ACCOUNTS[PARTNER_OF[email]].name;
+  store.set("playerNames", PLAYER_NAMES);
+  updatePartnerUI();
+  closeModal();
+  netChip();
+  autoConnect();
+}
+
 /* ---- Couple Link UI ---- */
 $("#linkChip").addEventListener("click", () => {
   const { me, partner } = coupleEmails();
-  if (!me || !partner) return openSetupModal();
+  if (!me || !partner) return openLoginModal();
+  const who = ACCOUNTS[me] ? ACCOUNTS[me].name : me;
+  const other = ACCOUNTS[partner] ? ACCOUNTS[partner].name : partner;
   openModal(`
-    <h3>💞 Your couple space</h3>
-    <p class="panel-sub">
-      You: <b>${me}</b> (${PLAYER_NAMES[0]})<br>
-      Partner: <b>${partner}</b> (${NET.named ? PLAYER_NAMES[1] : PLAYER_NAMES[1]})
-    </p>
-    <p class="panel-sub" id="autoStatus">${NET.connected ? "✅ Linked right now" : (NET.peer || mqttClients.length) ? "⏳ Connecting…" : "Not connected — tap reconnect"}</p>
+    <h3>💞 ${who} & ${other}</h3>
+    <p class="panel-sub" id="autoStatus">${NET.connected ? "✅ Linked right now — everything syncs live" : (NET.peer || mqttClients.length) ? `⏳ Waiting for ${other} to open the app and log in…` : "Not connected — tap reconnect"}</p>
+    <p class="panel-sub">Logged in as <b>${me}</b></p>
     <div class="btn-row" style="justify-content:center">
       <button class="btn primary" id="suReconnect">Reconnect now</button>
-      <button class="btn ghost" id="suEdit">Change details</button>
-    </div>
-    <details style="margin-top:14px"><summary style="color:var(--muted);font-size:13px">Advanced: one-time room code</summary>
-      <div style="margin-top:10px"><button class="btn ghost small" id="suManual" style="width:100%">Use a room code instead</button></div>
-    </details>`);
+      <button class="btn ghost" id="suLogout">Log out</button>
+    </div>`);
   $("#suReconnect").addEventListener("click", () => {
     netTeardown();
     closeModal();
     autoConnect();
   });
-  $("#suEdit").addEventListener("click", () => { netTeardown(); closeModal(); openSetupModal(); });
-  $("#suManual").addEventListener("click", () => { netTeardown(); openCodeModal(); });
+  $("#suLogout").addEventListener("click", () => {
+    netTeardown();
+    localStorage.removeItem("duo_myEmail");
+    localStorage.removeItem("duo_partnerEmail");
+    closeModal();
+    openLoginModal();
+  });
 });
 
-function openSetupModal() {
-  const { me, partner } = coupleEmails();
-  const saved = store.get("playerNames", ["", ""]);
+function openLoginModal() {
   openModal(`
-    <h3>💞 Set up your couple — one time only</h3>
-    <p class="panel-sub">Each of you does this once on your own phone. After that, opening the app connects you two automatically — no codes, ever.</p>
-    <input type="text" id="suName" placeholder="Your name" value="${me ? PLAYER_NAMES[0] : ""}" autocomplete="off" style="margin-bottom:8px">
-    <input type="email" id="suEmail" placeholder="Your email (e.g. rupom@gmail.com)" value="${me}" autocomplete="off" style="margin-bottom:8px">
-    <input type="text" id="suPName" placeholder="Partner's name" value="${partner ? PLAYER_NAMES[1] : ""}" autocomplete="off" style="margin-bottom:8px">
-    <input type="email" id="suPEmail" placeholder="Partner's email (e.g. choa@gmail.com)" value="${partner}" autocomplete="off" style="margin-bottom:12px">
-    <button class="btn primary" id="suGo" style="width:100%">Save & connect us 💞</button>
-    <p class="panel-sub" style="margin-top:10px">Your two emails create your private room — the emails must match what your partner types for <b>you</b>.</p>
-    <details style="margin-top:6px"><summary style="color:var(--muted);font-size:13px">Advanced: one-time room code</summary>
-      <div style="margin-top:10px"><button class="btn ghost small" id="suManual2" style="width:100%">Use a room code instead</button></div>
-    </details>`);
-  $("#suGo").addEventListener("click", () => {
-    const name = $("#suName").value.trim();
-    const email = $("#suEmail").value.trim();
-    const pname = $("#suPName").value.trim();
-    const pemail = $("#suPEmail").value.trim();
-    if (!/@/.test(email) || !/@/.test(pemail)) return toast("Both emails are needed — that's how your rooms match");
-    if (email.toLowerCase() === pemail.toLowerCase()) return toast("Partner's email must be different from yours");
-    store.set("myEmail", email);
-    store.set("partnerEmail", pemail);
-    setMyName(name || "Me");
-    PLAYER_NAMES[1] = pname || PLAYER_NAMES[1];
-    store.set("playerNames", PLAYER_NAMES);
-    updatePartnerUI();
-    closeModal();
-    autoConnect();
-  });
-  $("#suManual2").addEventListener("click", () => openCodeModal());
+    <h3>💞 Who are you?</h3>
+    <p class="panel-sub">Tap yourself, enter your password — and we'll connect you two automatically. No codes, ever.</p>
+    <div class="login-cards">
+      <button class="login-card" data-email="choa@gmail.com">
+        <span class="login-avatar" style="background:#e58aa0">C</span>
+        <span><b>Choа</b><br><small>choa@gmail.com</small></span>
+      </button>
+      <button class="login-card" data-email="rupom@gmail.com">
+        <span class="login-avatar" style="background:#7fa8e0">R</span>
+        <span><b>Rupom</b><br><small>rupom@gmail.com</small></span>
+      </button>
+    </div>
+    <div id="loginPassBox" class="hidden">
+      <input type="password" id="loginPass" placeholder="Password" autocomplete="off" style="margin-bottom:10px">
+      <button class="btn primary" id="loginGo" style="width:100%">Log in</button>
+    </div>
+    <p class="panel-sub" id="loginStatus" style="text-align:center;margin-top:10px;min-height:18px"></p>`);
+  let picked = null;
+  $$(".login-card").forEach(card => card.addEventListener("click", () => {
+    picked = card.dataset.email;
+    $$(".login-card").forEach(c => c.classList.toggle("picked", c === card));
+    $("#loginPassBox").classList.remove("hidden");
+    $("#loginPass").focus();
+  }));
+  const tryLogin = () => {
+    const pass = $("#loginPass").value.trim();
+    if (!picked) return toast("Tap your name first");
+    if (pass.toUpperCase() !== ACCOUNTS[picked].pass.toUpperCase()) {
+      $("#loginStatus").textContent = "❌ Wrong password — try again";
+      return;
+    }
+    $("#loginStatus").textContent = "✓ Welcome " + ACCOUNTS[picked].name + " — connecting…";
+    setTimeout(() => loginAs(picked), 400);
+  };
+  $("#loginGo").addEventListener("click", tryLogin);
+  $("#loginPass").addEventListener("keydown", (e) => { if (e.key === "Enter") tryLogin(); });
 }
 
 /* ---- Manual room-code path (advanced) ---- */
@@ -1929,7 +1967,7 @@ unlockSnapDares();
   updatePartnerUI();
 }
 // connect the fixed couple automatically; first visit opens the one-time setup
-if (!autoConnect()) setTimeout(openSetupModal, 600);
+if (!autoConnect()) setTimeout(openLoginModal, 600);
 $("#spinnerOptions").value = spinnerOptions().join("\n");
 renderSavedStarters();
 renderMilestones();
