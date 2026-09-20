@@ -24,10 +24,26 @@ function toast(text) {
    One partner creates a room code, the other joins with it. The connection is a
    peer-to-peer, end-to-end encrypted data channel — it works across the internet
    with no DuoConnect server. Both sides can act; both sides see. */
-const NET = { peer: null, conn: null, code: null, connected: false, named: false };
+const NET = { peer: null, conn: null, code: null, connected: false, named: false, joinTimeout: null };
 const ROOM_PREFIX = "duoconnect-v1-";
 
 function partnerLabel() { return NET.named ? PLAYER_NAMES[1] : "your partner"; }
+
+/* STUN finds a direct path; TURN relays traffic when both partners are behind
+   strict/carrier NATs (the usual reason "different places" failed before). */
+const PEER_CONFIG = {
+  config: {
+    iceServers: [
+      { urls: "stun:stun.l.google.com:19302" },
+      { urls: "stun:global.stun.twilio.com:3478" },
+      { urls: "turn:openrelay.metered.ca:80", username: "openrelayproject", credential: "openrelayproject" },
+      { urls: "turn:openrelay.metered.ca:443", username: "openrelayproject", credential: "openrelayproject" },
+      { urls: "turn:openrelay.metered.ca:443?transport=tcp", username: "openrelayproject", credential: "openrelayproject" }
+    ],
+    iceCandidatePoolSize: 10
+  },
+  debug: 0
+};
 
 function netSend(type, payload) {
   if (NET.connected && NET.conn && NET.conn.open) {
@@ -60,6 +76,7 @@ function netJoin(code) {
 }
 
 function netTeardown() {
+  if (NET.joinTimeout) { clearTimeout(NET.joinTimeout); NET.joinTimeout = null; }
   if (NET.conn) { try { NET.conn.close(); } catch {} }
   if (NET.peer) { try { NET.peer.destroy(); } catch {} }
   NET.conn = NET.peer = null;
@@ -68,21 +85,31 @@ function netTeardown() {
 }
 
 function netStart(code, host) {
-  if (typeof Peer === "undefined") return toast("Link library failed to load — check your internet");
+  if (typeof Peer === "undefined") return toast("Link library failed to load — check your internet, then reload the page");
   NET.code = code;
   netStatus("Connecting…");
-  NET.peer = new Peer(host ? ROOM_PREFIX + code : undefined);
+  NET.peer = new Peer(host ? ROOM_PREFIX + code : undefined, PEER_CONFIG);
   NET.peer.on("open", () => {
     if (host) {
       netStatus(`Room ${code} — waiting for partner…`);
+      netChip();
     } else {
-      netAttach(NET.peer.connect(ROOM_PREFIX + code, { reliable: true }));
+      const c = NET.peer.connect(ROOM_PREFIX + code, { reliable: true });
+      NET.joinTimeout = setTimeout(() => {
+        if (!NET.connected) {
+          toast("Couldn't reach the room in 20s — double-check the code, or have your partner create a new room");
+          netTeardown();
+        }
+      }, 20000);
+      netAttach(c);
     }
   });
   NET.peer.on("connection", (c) => netAttach(c));
   NET.peer.on("error", (err) => {
     if (err.type === "unavailable-id") toast("That room code is already in use — make a new one");
-    else if (err.type === "peer-unavailable") toast("No room found with that code");
+    else if (err.type === "peer-unavailable") toast("No live room found with that code — ask your partner to keep their tab open");
+    else if (err.type === "browser-incompatible") toast("This browser can't do direct links — try Chrome, Edge or Safari");
+    else if (err.type === "network" || err.type === "server-error" || err.type === "socket-error") toast("Signaling server unreachable — check your internet and try again");
     else toast("Link error: " + err.type);
     netTeardown();
   });
@@ -92,13 +119,29 @@ function netStart(code, host) {
 function netAttach(conn) {
   NET.conn = conn;
   conn.on("open", () => {
+    if (NET.joinTimeout) { clearTimeout(NET.joinTimeout); NET.joinTimeout = null; }
     NET.connected = true;
     netChip();
+    closeModal();
     netSend("hello", { name: PLAYER_NAMES[0] });
     toast("Partner linked — what you do, they see 💞");
+    // surface relay quality problems instead of a silent dead link
+    if (conn.peerConnection) {
+      conn.peerConnection.addEventListener("iceconnectionstatechange", () => {
+        const st = conn.peerConnection.iceConnectionState;
+        if (st === "failed" || st === "disconnected") {
+          toast("Connection dropped — try switching one phone to mobile data, then create a new room and re-join");
+        }
+      });
+    }
   });
   conn.on("data", (d) => { if (d && d.type) netReceive(d.type, d.payload || {}); });
+  conn.on("error", (err) => {
+    toast("Link trouble: " + (err && err.type ? err.type : "connection lost"));
+    netTeardown();
+  });
   conn.on("close", () => {
+    if (!NET.connected) return;
     NET.connected = false;
     netChip();
     toast("Partner disconnected");
@@ -244,7 +287,8 @@ $("#linkChip").addEventListener("click", () => {
     <div class="btn-row">
       <input type="text" id="netJoinCode" placeholder="Join code (e.g. K7X2M)" style="text-transform:uppercase" maxlength="5" autocomplete="off">
       <button class="btn primary" id="netJoinBtn">Join</button>
-    </div>`);
+    </div>
+    <p class="panel-sub" id="netJoinStatus" style="text-align:center;margin-top:8px;min-height:18px"></p>`);
   $("#netCreate").addEventListener("click", () => {
     const name = $("#netName").value.trim() || "Me";
     setMyName(name);
@@ -258,6 +302,7 @@ $("#linkChip").addEventListener("click", () => {
     if (code.length < 4) return toast("Enter the code your partner shared");
     const name = $("#netName").value.trim() || "Me";
     setMyName(name);
+    $("#netJoinStatus").textContent = `Connecting to ${code.toUpperCase()} — hold on…`;
     netJoin(code);
   });
 });

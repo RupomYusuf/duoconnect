@@ -4,8 +4,9 @@
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
 <title>DuoConnect — Play Together, Stay Close</title>
-<script src="https://unpkg.com/peerjs@1.5.4/dist/peerjs.min.js"></script>
-<link rel="stylesheet" href="styles.css">
+<script src="https://unpkg.com/peerjs@1.5.4/dist/peerjs.min.js"
+        onerror="var s=document.createElement('script');s.src='https://cdn.jsdelivr.net/npm/peerjs@1.5.4/dist/peerjs.min.js';document.head.appendChild(s)"></script>
+<link rel="stylesheet" href="styles.css?v=4">
 </head>
 <body data-mode="hub">
 
@@ -389,6 +390,6 @@
 
 <div id="gameModal" class="modal hidden"><div class="modal-card" id="gameModalBody"></div></div>
 <div id="toast" class="toast hidden"></div>
-<script src="app.js"></script>
+<script src="app.js?v=4"></script>
 </body>
 </html>
