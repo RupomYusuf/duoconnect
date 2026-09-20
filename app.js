@@ -25,7 +25,9 @@ function toast(text) {
    peer-to-peer, end-to-end encrypted data channel — it works across the internet
    with no DuoConnect server. Both sides can act; both sides see. */
 const NET = { peer: null, conn: null, code: null, connected: false, named: false,
-              joinTimeout: null, joining: false, joinAttempts: 0, wakeLock: null };
+              joinTimeout: null, joining: false, joinAttempts: 0, wakeLock: null,
+              isHost: false, linked: false, transport: "rtc",
+              nonce: Math.random().toString(36).slice(2, 10) };
 const ROOM_PREFIX = "duoconnect-v1-";
 
 function partnerLabel() { return NET.named ? PLAYER_NAMES[1] : "your partner"; }
@@ -36,6 +38,74 @@ async function requestWakeLock() {
 function releaseWakeLock() {
   try { NET.wakeLock && NET.wakeLock.release(); } catch {}
   NET.wakeLock = null;
+}
+
+/* ---- Backup transport: public MQTT relay ---------------------------------
+   WebRTC can fail between strict carrier NATs even with TURN. This relay runs
+   over an outbound WebSocket, so it works from any network. It only carries
+   app messages — it is NOT end-to-end encrypted like the direct link. */
+let mqttClient = null;
+
+function mqttStart(code, isJoiner) {
+  if (typeof mqtt === "undefined" || mqttClient) return;
+  try {
+    mqttClient = mqtt.connect("wss://broker.emqx.io:8084/mqtt", {
+      clientId: "duo_" + Math.random().toString(16).slice(2, 10),
+      reconnectPeriod: 3000, connectTimeout: 8000, keepalive: 30
+    });
+  } catch { return; }
+  NET.mqttTopic = ROOM_PREFIX + code;
+  mqttClient.on("connect", () => {
+    mqttClient.subscribe(NET.mqttTopic);
+    if (isJoiner) mqttPublish({ t: "join-req", name: PLAYER_NAMES[0] });
+  });
+  mqttClient.on("message", (t, msg) => {
+    let d; try { d = JSON.parse(msg.toString()); } catch { return; }
+    if (d.n === NET.nonce) return; // our own echo
+    mqttReceive(d);
+  });
+}
+
+function mqttPublish(obj) {
+  if (mqttClient && mqttClient.connected) {
+    mqttClient.publish(NET.mqttTopic, JSON.stringify({ ...obj, n: NET.nonce }));
+  }
+}
+
+function mqttStop() {
+  if (mqttClient) { try { mqttClient.end(true); } catch {} mqttClient = null; }
+}
+
+function mqttReceive(d) {
+  if (d.t === "join-req") {
+    if (!NET.linked && NET.isHost) {
+      linkVia("mqtt");
+      mqttPublish({ t: "join-ack", name: PLAYER_NAMES[0] });
+    }
+    return;
+  }
+  if (d.t === "join-ack") {
+    if (!NET.linked && NET.joining) linkVia("mqtt");
+    return;
+  }
+  if (NET.linked && NET.transport === "mqtt" && d.t && d.p !== undefined) {
+    netReceive(d.t, d.p);
+  }
+}
+
+function linkVia(transport) {
+  if (NET.linked) return;
+  NET.linked = true;
+  NET.transport = transport;
+  NET.connected = true;
+  NET.joining = false;
+  if (NET.joinTimeout) { clearTimeout(NET.joinTimeout); NET.joinTimeout = null; }
+  netChip();
+  closeModal();
+  netSend("hello", { name: PLAYER_NAMES[0] });
+  toast(transport === "mqtt"
+    ? "Linked via backup relay — works anywhere, but avoid very private snaps on this mode"
+    : "Partner linked — what you do, they see 💞");
 }
 
 /* STUN finds a direct path; TURN relays traffic when both partners are behind
@@ -55,9 +125,9 @@ const PEER_CONFIG = {
 };
 
 function netSend(type, payload) {
-  if (NET.connected && NET.conn && NET.conn.open) {
-    NET.conn.send({ type, payload });
-  }
+  if (!NET.connected) return;
+  if (NET.transport === "mqtt") { mqttPublish({ t: type, p: payload }); return; }
+  if (NET.conn && NET.conn.open) NET.conn.send({ type, payload });
 }
 
 function netChip() {
@@ -88,23 +158,37 @@ function netTeardown() {
   if (NET.joinTimeout) { clearTimeout(NET.joinTimeout); NET.joinTimeout = null; }
   NET.joining = false;
   releaseWakeLock();
+  mqttStop();
   if (NET.conn) { try { NET.conn.close(); } catch {} }
   if (NET.peer) { try { NET.peer.destroy(); } catch {} }
   NET.conn = NET.peer = null;
   NET.connected = false;
+  NET.linked = false;
+  NET.transport = "rtc";
   netChip();
 }
 
 function netStart(code, host) {
-  if (typeof Peer === "undefined") return toast("Link library failed to load — check your internet, then reload the page");
   NET.code = code;
+  NET.isHost = host;
+  NET.linked = false;
+  NET.transport = "rtc";
   NET.joining = !host;
   NET.joinAttempts = 0;
   netStatus("Connecting…");
   requestWakeLock();
-  NET.peer = new Peer(host ? ROOM_PREFIX + code : undefined, PEER_CONFIG);
+  // backup relay starts immediately on both sides — whichever path links first wins
+  mqttStart(code, !host);
+  try {
+    NET.peer = new Peer(host ? ROOM_PREFIX + code : undefined, PEER_CONFIG);
+  } catch (e) {
+    if (mqttClient) return; // backup relay will carry the link
+    toast("This browser can't do direct links — try Chrome, Edge or Safari");
+    netTeardown();
+    return;
+  }
   NET.peer.on("open", () => {
-    if (NET.connected) return; // re-open after reconnect while already linked
+    if (NET.connected || NET.linked) return;
     if (host) {
       netStatus(`Room ${code} — waiting for partner… keep this screen open`);
       netChip();
@@ -114,49 +198,60 @@ function netStart(code, host) {
   });
   // the signaling socket can silently drop (mobile especially) — re-register the room
   NET.peer.on("disconnected", () => {
-    if (!NET.peer || NET.peer.destroyed) return;
+    if (!NET.peer || NET.peer.destroyed || NET.linked) return;
     netStatus("Reconnecting to room service…");
     NET.peer.reconnect();
   });
   NET.peer.on("connection", (c) => netAttach(c));
   NET.peer.on("error", (err) => {
     if (err.type === "peer-unavailable" && NET.joining) return; // handled by the retry loop
+    if (mqttClient && !NET.linked) return; // backup relay will carry the link instead
     if (err.type === "unavailable-id") toast("That room code is already in use — make a new one");
     else if (err.type === "peer-unavailable") toast("No live room found with that code — ask your partner to keep their tab open");
     else if (err.type === "browser-incompatible") toast("This browser can't do direct links — try Chrome, Edge or Safari");
     else if (err.type === "network" || err.type === "server-error" || err.type === "socket-error") toast("Signaling server unreachable — checking again in a moment…");
     else toast("Link error: " + err.type);
-    if (err.type !== "network" && err.type !== "server-error" && err.type !== "socket-error") netTeardown();
+    netTeardown();
   });
   if (host) netChip();
+  if (!host) {
+    // if the direct path is stalling, tell the user the backup is taking over
+    setTimeout(() => {
+      if (!NET.linked && NET.joining) setJoinStatus("Direct link is slow — backup relay taking over…");
+    }, 8000);
+  }
   if (NET.joinTimeout) clearTimeout(NET.joinTimeout);
   NET.joinTimeout = setTimeout(() => {
-    if (!NET.connected && NET.joining) {
-      toast("Couldn't reach the room in 90s — make a fresh room on both sides (old rooms expire)");
+    if (!NET.linked && NET.joining) {
+      toast("Couldn't link in 90s — make a fresh room on both sides (old rooms expire)");
       netTeardown();
     }
   }, 90000);
 }
 
-/* Joiner: retry the handshake every 4s for up to 90s — the host's tab may be
-   waking back up or re-registering, so one "not found" shouldn't be final. */
+/* Joiner: keep retrying the WebRTC handshake — the host's tab may be waking up. */
 function tryConnect(code) {
-  if (!NET.joining || !NET.peer || NET.peer.destroyed) return;
+  if (!NET.joining || NET.linked || !NET.peer || NET.peer.destroyed) return;
   if (NET.peer.disconnected) { NET.peer.reconnect(); return; }
   NET.joinAttempts++;
-  if (NET.joinAttempts > 1) {
-    netStatus(`Room ${code} — partner not answering yet, retry ${NET.joinAttempts}…`);
+  if (NET.joinAttempts > 1) setJoinStatus(`Partner not answering yet, retry ${NET.joinAttempts}…`);
+  if (!NET.conn || NET.conn.closed) {
+    NET.conn = NET.peer.connect(ROOM_PREFIX + code, { reliable: true });
+    netAttach(NET.conn);
   }
-  const c = NET.peer.connect(ROOM_PREFIX + code, { reliable: true });
-  netAttach(c);
 }
 setInterval(() => {
-  if (NET.joining && !NET.connected && NET.peer && !NET.peer.destroyed) {
-    tryConnect(NET.code);
+  if (NET.joining && !NET.linked && !NET.connected) {
+    if (NET.peer && !NET.peer.destroyed) tryConnect(NET.code);
+    mqttPublish({ t: "join-req", name: PLAYER_NAMES[0] });
   }
 }, 4000);
 
-// when the page becomes visible again, revive a dropped signaling socket
+function setJoinStatus(text) {
+  netStatus(text);
+  const line = $("#netJoinStatus");
+  if (line) line.textContent = text;
+}
 document.addEventListener("visibilitychange", () => {
   if (document.visibilityState === "visible" && NET.peer && !NET.peer.destroyed && NET.peer.disconnected) {
     NET.peer.reconnect();
@@ -165,32 +260,15 @@ document.addEventListener("visibilitychange", () => {
 
 function netAttach(conn) {
   NET.conn = conn;
-  conn.on("open", () => {
-    if (NET.joinTimeout) { clearTimeout(NET.joinTimeout); NET.joinTimeout = null; }
-    NET.joining = false;
-    NET.connected = true;
-    netChip();
-    closeModal();
-    netSend("hello", { name: PLAYER_NAMES[0] });
-    toast("Partner linked — what you do, they see 💞");
-    // surface relay quality problems instead of a silent dead link
-    if (conn.peerConnection) {
-      conn.peerConnection.addEventListener("iceconnectionstatechange", () => {
-        const st = conn.peerConnection.iceConnectionState;
-        if (st === "failed" || st === "disconnected") {
-          toast("Connection dropped — try switching one phone to mobile data, then create a new room and re-join");
-        }
-      });
-    }
-  });
+  conn.on("open", () => linkVia("rtc"));
   conn.on("data", (d) => { if (d && d.type) netReceive(d.type, d.payload || {}); });
   conn.on("error", (err) => {
-    if (err && err.type === "peer-unavailable" && NET.joining) return; // retry loop handles it
+    if (NET.transport === "mqtt" || (mqttClient && !NET.linked)) return; // backup handles it
     toast("Link trouble: " + (err && err.type ? err.type : "connection lost"));
     netTeardown();
   });
   conn.on("close", () => {
-    if (!NET.connected) return;
+    if (!NET.connected || NET.transport === "mqtt") return;
     NET.connected = false;
     netChip();
     toast("Partner disconnected");
