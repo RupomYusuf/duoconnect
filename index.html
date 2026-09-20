@@ -195,6 +195,7 @@
       <button class="subnav-btn active" data-tab="chat">💬 Messages</button>
       <button class="subnav-btn" data-tab="games">🔥 Intimate Games</button>
       <button class="subnav-btn" data-tab="lists">📝 Shared Lists</button>
+      <button class="subnav-btn" data-tab="snaps">📸 Snaps</button>
       <button class="subnav-btn" data-tab="vault">🗝️ Vault</button>
       <button class="subnav-btn" data-tab="mood">📅 Mood &amp; Availability</button>
     </nav>
@@ -309,6 +310,48 @@
     <section class="tab" id="tab-lists">
       <p class="consent-banner">🤝 Shared lists are only visible to both of you. Items require mutual opt-in before they're revealed — nothing appears until you've both agreed to explore it.</p>
       <div class="panel-row" id="listPanels"></div>
+    </section>
+
+    <!-- Snaps -->
+    <section class="tab" id="tab-snaps">
+      <div class="panel-row">
+        <div class="panel">
+          <h3>📸 Send a Snap</h3>
+          <p class="panel-sub">Take or choose a photo and send it straight to your partner over the encrypted link. Photos live on your devices only — nothing is uploaded anywhere.</p>
+          <label class="toggle" style="margin-bottom:8px">Auto-delete after
+            <select id="snapDeleteTimer" style="width:auto;margin-left:6px">
+              <option value="0">never</option>
+              <option value="1">1 min</option>
+              <option value="60">1 hour</option>
+              <option value="1440">24 h</option>
+            </select>
+          </label>
+          <label class="btn primary file-btn">📷 Take / choose photo
+            <input type="file" id="snapFile" accept="image/*" hidden>
+          </label>
+          <p class="panel-sub" id="snapHint" style="margin-top:10px">Link your partner with 🔞 Couple Link first — snaps travel directly, device to device.</p>
+        </div>
+        <div class="panel">
+          <h3>🎯 Snap Dares — After Dark</h3>
+          <div id="snapGate">
+            <p class="panel-sub">Extremely spicy photo dares. Unlocks only with typed consent from <b>both</b> partners — and either of you can still decline any individual dare, always.</p>
+            <button class="btn primary" id="snapGateOpen">Unlock with dual consent</button>
+          </div>
+          <div id="snapDareUI" class="hidden">
+            <p class="panel-sub">Draw an extremely spicy photo dare and send it. Your partner accepts or declines — a no is always free.</p>
+            <div class="draw-result" id="snapDareText">Draw a dare…</div>
+            <div class="btn-row">
+              <button class="btn primary" id="snapDareDraw">Draw a dare</button>
+              <button class="btn ghost" id="snapDareSend" style="display:none">Send dare to partner 💌</button>
+            </div>
+          </div>
+        </div>
+      </div>
+      <div class="panel" style="margin-top:14px">
+        <h3>💌 Snap Feed</h3>
+        <p class="panel-sub">Snaps and dares between you — auto-deleted when their timer runs out.</p>
+        <div class="snap-feed" id="snapFeed"></div>
+      </div>
     </section>
 
     <!-- Vault -->

@@ -173,6 +173,34 @@ function netReceive(type, p) {
       if (btn) { todLevel = p.level; $$(".level-btn").forEach(b => b.classList.toggle("on", b === btn)); }
       break;
     }
+    case "snap": {
+      addSnap({
+        id: p.id, kind: "snap", from: "them", img: p.img, t: p.t,
+        expiresAt: p.minutes ? Date.now() + p.minutes * 60000 : null
+      });
+      toast("📸 New snap from your partner");
+      break;
+    }
+    case "dareRequest": {
+      addSnap({ id: p.id, kind: "dare", from: "them", text: p.text, status: "pending", t: p.t });
+      toast("🎯 New snap dare — accept or decline, your call");
+      if (!$("#tab-snaps").classList.contains("active")) toast("Check 📸 Snaps");
+      break;
+    }
+    case "dareFulfilled": {
+      const list = snapsList();
+      const entry = list.find(s => s.id === p.id);
+      if (entry) { entry.status = "fulfilled"; saveSnaps(list); renderSnaps(); }
+      toast("They fulfilled your dare 👀");
+      break;
+    }
+    case "dareDeclined": {
+      const list = snapsList();
+      const entry = list.find(s => s.id === p.id);
+      if (entry) { entry.status = "declined"; saveSnaps(list); renderSnaps(); }
+      toast("They declined 🤍 — never ask twice");
+      break;
+    }
     case "tab": {
       if (document.body.dataset.mode === "private") {
         const btn = $$(".subnav-btn").find(b => b.dataset.tab === p.tab);
@@ -1241,6 +1269,193 @@ $("#fantBlend").addEventListener("click", () => {
   });
 });
 
+/* ---- Snap feed, snaps & dare requests (private space) ---- */
+const SNAP_DARES = [
+  "A photo that shows exactly how you're dressed right now",
+  "The view from where you'd want my hands to be",
+  "Your best 'come here' look — lips included",
+  "A sneak preview of what's under today's outfit",
+  "The part of you you most want me to kiss tonight",
+  "A mirror shot of whatever (or whoever) you're wearing",
+  "Something you'd only dare to show me",
+  "Your lips, mid-thought about tonight",
+  "The first thing you'd take off if I were there",
+  "Whatever pose makes you feel dangerous"
+];
+let currentSnapDare = null;
+
+function snapsList() { return store.get("snaps", []); }
+function saveSnaps(list) { store.set("snaps", list); }
+
+function purgeSnaps() {
+  const list = snapsList();
+  const kept = list.filter(s => !s.expiresAt || s.expiresAt > Date.now());
+  if (kept.length !== list.length) saveSnaps(kept);
+  return kept;
+}
+
+function renderSnaps() {
+  const feed = $("#snapFeed");
+  if (!feed) return;
+  const list = purgeSnaps();
+  if (!list.length) {
+    feed.innerHTML = `<p class="panel-sub" style="text-align:center">Nothing here yet — send something 📸</p>`;
+    return;
+  }
+  feed.innerHTML = list.slice().reverse().map(s => {
+    const when = s.t || "";
+    if (s.kind === "dare") {
+      const incoming = s.from === "them";
+      let body;
+      if (s.status === "pending") {
+        body = incoming
+          ? `<p class="snap-dare-text">"${s.text}"</p>
+             <div class="btn-row" style="justify-content:center">
+               <button class="btn primary small" data-dare-accept="${s.id}">Accept — I'll send it 💕</button>
+               <button class="btn ghost small" data-dare-decline="${s.id}">Decline</button>
+             </div>`
+          : `<p class="snap-dare-text">You dared: "${s.text}"</p><p class="panel-sub" style="text-align:center">waiting for their answer…</p>`;
+      } else if (s.status === "declined") {
+        body = `<p class="snap-dare-text">"${s.text}"</p><p class="panel-sub" style="text-align:center">${incoming ? "you declined — all good 🤍" : "they declined — never ask twice 🤍"}</p>`;
+      } else if (s.status === "fulfilled") {
+        body = `<p class="snap-dare-text">"${s.text}"</p><p class="panel-sub" style="text-align:center">${incoming ? "they sent it 👀" : "you fulfilled it 💕"}</p>`;
+      }
+      return `<div class="snap-card dare">${body}<span class="snap-when">${when}</span></div>`;
+    }
+    return `<div class="snap-card">
+      <img src="${s.img}" alt="snap" class="snap-img">
+      <span class="snap-when">${s.from === "them" ? "from partner" : "from you"} · ${when}${s.expiresAt ? " · auto-deletes" : ""}</span>
+    </div>`;
+  }).join("");
+}
+
+function addSnap(entry) {
+  const list = snapsList();
+  list.push(entry);
+  saveSnaps(list);
+  renderSnaps();
+}
+
+function resizeImageFile(file, cb) {
+  const reader = new FileReader();
+  reader.onload = () => {
+    const img = new Image();
+    img.onload = () => {
+      const max = 720;
+      const scale = Math.min(1, max / Math.max(img.width, img.height));
+      const canvas = document.createElement("canvas");
+      canvas.width = Math.round(img.width * scale);
+      canvas.height = Math.round(img.height * scale);
+      canvas.getContext("2d").drawImage(img, 0, 0, canvas.width, canvas.height);
+      cb(canvas.toDataURL("image/jpeg", 0.75));
+    };
+    img.src = reader.result;
+  };
+  reader.readAsDataURL(file);
+}
+
+function sendSnapImage(dataURL) {
+  const minutes = parseInt($("#snapDeleteTimer").value, 10);
+  const entry = {
+    id: "s" + Date.now() + Math.floor(Math.random() * 999),
+    kind: "snap", from: "me", img: dataURL,
+    t: new Date().toTimeString().slice(0, 5),
+    expiresAt: minutes ? Date.now() + minutes * 60000 : null
+  };
+  addSnap(entry);
+  netSend("snap", { id: entry.id, img: dataURL, t: entry.t, minutes });
+  toast("Snap sent — device to device, encrypted 🔐");
+}
+
+$("#snapFile").addEventListener("change", (e) => {
+  const file = e.target.files[0];
+  if (!file) return;
+  resizeImageFile(file, sendSnapImage);
+  e.target.value = "";
+});
+
+// test hook (also used for programmatic sends): window.sendSnapData(dataURL)
+window.sendSnapData = sendSnapImage;
+
+$("#snapGateOpen").addEventListener("click", () => {
+  openModal(`
+    <h3>🔞 Unlock Snap Dares?</h3>
+    <p class="panel-sub">Extremely spicy photo dares. Both partners must opt in — and consent is per dare: either of you can decline any request, any time, no questions asked.</p>
+    <label class="toggle" style="justify-content:center;margin-bottom:10px"><input type="checkbox" id="sgMine"> I consent</label>
+    <label class="toggle" style="justify-content:center;margin-bottom:14px"><input type="checkbox" id="sgTheirs"> My partner has consented</label>
+    <input type="text" id="sgWord" placeholder="Type YES to confirm" autocomplete="off" style="margin-bottom:12px">
+    <div class="btn-row" style="justify-content:center">
+      <button class="btn primary" id="sgGo">Unlock</button>
+      <button class="btn ghost" id="sgCancel">Keep it locked</button>
+    </div>`);
+  $("#sgCancel").addEventListener("click", closeModal);
+  $("#sgGo").addEventListener("click", () => {
+    if (!$("#sgMine").checked || !$("#sgTheirs").checked || $("#sgWord").value.trim().toUpperCase() !== "YES") {
+      return toast("Both checkboxes and a typed YES are required");
+    }
+    store.set("snapsConsent", true);
+    unlockSnapDares();
+    closeModal();
+    toast("Snap Dares unlocked 🔞");
+  });
+});
+
+function unlockSnapDares() {
+  if (!store.get("snapsConsent", false)) return;
+  $("#snapGate").classList.add("hidden");
+  $("#snapDareUI").classList.remove("hidden");
+}
+
+$("#snapDareDraw").addEventListener("click", () => {
+  let dare; do { dare = SNAP_DARES[Math.floor(Math.random() * SNAP_DARES.length)]; } while (dare === currentSnapDare);
+  currentSnapDare = dare;
+  $("#snapDareText").textContent = `"${dare}"`;
+  $("#snapDareSend").style.display = "";
+});
+
+$("#snapDareSend").addEventListener("click", () => {
+  if (!currentSnapDare) return;
+  const entry = {
+    id: "d" + Date.now(), kind: "dare", from: "me",
+    text: currentSnapDare, status: "pending",
+    t: new Date().toTimeString().slice(0, 5)
+  };
+  addSnap(entry);
+  netSend("dareRequest", { id: entry.id, text: currentSnapDare, t: entry.t });
+  $("#snapDareSend").style.display = "none";
+  currentSnapDare = null;
+  toast("Dare sent — it's their call 💞");
+});
+
+$("#snapFeed").addEventListener("click", (e) => {
+  const accept = e.target.closest("[data-dare-accept]");
+  const decline = e.target.closest("[data-dare-decline]");
+  if (!accept && !decline) return;
+  const list = snapsList();
+  const entry = list.find(s => s.id === (accept || decline).dataset.dareAccept || s.id === (accept || decline).dataset.dareDecline);
+  if (!entry) return;
+  if (accept) {
+    entry.status = "fulfilled";
+    netSend("dareFulfilled", { id: entry.id });
+    toast("Dare accepted — the camera button is right there 📸");
+    if (navigator.mediaDevices && navigator.mediaDevices.getUserMedia) {
+      // hand the user straight to their camera roll via the file input
+      $("#snapFile").click();
+    }
+  } else {
+    entry.status = "declined";
+    netSend("dareDeclined", { id: entry.id });
+    toast("Declined — no explanation needed 🤍");
+  }
+  saveSnaps(list);
+  renderSnaps();
+});
+
+setInterval(() => {
+  const before = snapsList().length;
+  if (purgeSnaps().length !== before) renderSnaps();
+}, 30000);
+
 /* ---- Seven minutes ---- */
 let sevenTimer = null;
 $("#sevenStart").addEventListener("click", () => {
@@ -1364,6 +1579,9 @@ $("#calGrid").addEventListener("click", (e) => {
 
 /* ================= Boot ================= */
 renderPinPad();
+purgeSnaps();
+renderSnaps();
+unlockSnapDares();
 $("#spinnerOptions").value = spinnerOptions().join("\n");
 renderSavedStarters();
 renderMilestones();
